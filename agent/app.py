@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 
 from agent.clients.custom_mcp_client import CustomMCPClient
@@ -9,17 +8,40 @@ from agent.models.message import Message, Role
 
 
 async def main():
-    #TODO:
-    # 1. Take a look what applies DialClient
-    # 2. Create empty list where you save tools from MCP Servers later
-    # 3. Create empty dict where where key is str (tool name) and value is instance of MCPClient or CustomMCPClient
-    # 4. Create UMS MCPClient, url is `http://localhost:8006/mcp` (use static method create and don't forget that its async)
-    # 5. Collect tools and dict [tool name, mcp client]
-    # 6. Do steps 4 and 5 for `https://remote.mcpservers.org/fetch/mcp`
-    # 7. Create DialClient, endpoint is `https://ai-proxy.lab.epam.com`
-    # 8. Create array with Messages and add there System message with simple instructions for LLM that it should help to handle user request
-    # 9. Create simple console chat (as we done in previous tasks)
-    raise NotImplementedError()
+    tools = []
+    tool_name_client_map: dict[str, MCPClient | CustomMCPClient] = {}
+
+    ums_client = await CustomMCPClient.create("http://localhost:8006/mcp")
+    fetch_client = await MCPClient.create("https://remote.mcpservers.org/fetch/mcp")
+
+    for client in (ums_client, fetch_client):
+        client_tools = await client.get_tools()
+        tools.extend(client_tools)
+        tool_name_client_map.update({tool["function"]["name"]: client for tool in client_tools})
+
+    api_key = os.getenv("DIAL_API_KEY")
+    if not api_key:
+        raise RuntimeError("Set the DIAL_API_KEY environment variable before starting the agent.")
+
+    dial_client = DialClient(
+        api_key=api_key,
+        endpoint="https://ai-proxy.lab.epam.com",
+        tools=tools,
+        tool_name_client_map=tool_name_client_map,
+    )
+    messages = [
+        Message(
+            role=Role.SYSTEM,
+            content="Help the user with their request. Use the available tools when they provide needed information.",
+        )
+    ]
+
+    print("Agent ready. Type 'exit' to finish.")
+    while user_input := input("You: ").strip():
+        if user_input.lower() == "exit":
+            break
+        messages.append(Message(role=Role.USER, content=user_input))
+        messages.append(await dial_client.get_completion(messages))
 
 if __name__ == "__main__":
     asyncio.run(main())
